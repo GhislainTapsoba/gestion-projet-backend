@@ -1,0 +1,228 @@
+```typescript
+import { NextRequest } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
+import { supabaseAdmin } from '@/lib/supabase';
+import { handleCorsOptions, corsResponse } from '@/lib/cors';
+import { sendEmail } from '@/lib/emailService';
+import { taskAssignedTemplate } from '@/lib/emailTemplates';
+import { createConfirmationToken } from '@/lib/emailConfirmation';
+import { mapDbRoleToUserRole, requirePermission, canManageProject } from '@/lib/permissions';
+
+// Gérer les requêtes OPTIONS (preflight CORS)
+export async function OPTIONS(request: NextRequest) {
+  return handleCorsOptions(request);
+}
+
+// GET /api/tasks - Récupérer toutes les tâches
+export async function GET(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return corsResponse({ error: 'Unauthorized' }, request, { status: 401 });
+    }
+
+    const userRole = mapDbRoleToUserRole(session.user.role as string | null);
+    const perm = requirePermission(userRole, 'tasks', 'read');
+    if (!perm.allowed) {
+      return corsResponse({ error: perm.error }, request, { status: 403 });
+    }
+
+const { searchParams } = new URL(request.url);
+const status = searchParams.get('status');
+const project_id = searchParams.get('project_id');
+
+let query = supabaseAdmin.from('tasks').select('*');
+
+if (status) {
+  query = query.eq('status', status);
+}
+
+if (project_id) {
+  query = query.eq('project_id', project_id);
+}
+
+const { data, error } = await query.order('created_at', { ascending: false });
+
+if (error) {
+  console.error('Supabase error:', error);
+  return corsResponse(
+    { error: 'Erreur lors de la récupération des tâches' },
+    request,
+    { status: 500 }
+  );
+}
+
+return corsResponse(data || [], request);
+  } catch (error) {
+  console.error('GET /api/tasks error:', error);
+  return corsResponse(
+    { error: 'Erreur serveur' },
+    request,
+    { status: 500 }
+  );
+}
+}
+
+// POST /api/tasks - Créer une nouvelle tâche
+export async function POST(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return corsResponse({ error: 'Unauthorized' }, request, { status: 401 });
+    }
+
+    const userRole = mapDbRoleToUserRole(session.user.role as string | null);
+    const userId = session.user.id as string;
+
+    const perm = requirePermission(userRole, 'tasks', 'create');
+    if (!perm.allowed) {
+      return corsResponse({ error: perm.error }, request, { status: 403 });
+    }
+
+    const body = await request.json();
+
+    // Validation
+    if (!body.title || !body.project_id) {
+      return corsResponse(
+        { error: 'Le titre et le project_id sont requis' },
+        request,
+        { status: 400 }
+      );
+    }
+
+    // Vérifier que l'utilisateur peut gérer le projet (manager/admin)
+    const { data: project } = await supabaseAdmin
+      .from('projects')
+      .select('id, manager_id')
+      .eq('id', body.project_id)
+      .single();
+
+    if (!project) {
+      return corsResponse(
+        { error: 'Projet introuvable' },
+        request,
+        { status: 404 }
+      );
+    }
+
+    if (!canManageProject(userRole, userId, project.manager_id)) {
+      return corsResponse(
+        { error: 'Vous ne pouvez créer des tâches que sur vos projets' },
+        request,
+        { status: 403 }
+      );
+    }
+
+    // Créer la tâche
+    const { data: task, error } = await supabaseAdmin
+      .from('tasks')
+      .insert({
+        title: body.title,
+        description: body.description || null,
+        status: body.status || 'TODO',
+        priority: body.priority || 'MEDIUM',
+        due_date: body.due_date || null,
+        assigned_to_id: body.assigned_to_id || null,
+        project_id: body.project_id,
+        stage_id: body.stage_id || null,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Supabase error:', error);
+      return corsResponse(
+        { error: 'Erreur lors de la création de la tâche' },
+        request,
+        { status: 500 }
+      );
+    }
+
+    // Log de l'activité
+    await supabaseAdmin.from('activity_logs').insert({
+      user_id: '00000000-0000-0000-0000-000000000001', // TODO: Récupérer l'ID de l'utilisateur connecté
+      action: 'create',
+      entity_type: 'task',
+      entity_id: task.id,
+      details: `Created task: ${ task.title } `,
+      metadata: { priority: task.priority, status: task.status }
+    });
+
+    // Envoyer un email si la tâche est assignée
+    if (task.assigned_to_id) {
+      try {
+        // Récupérer les infos de l'utilisateur assigné et du projet
+        const { data: assignedUser } = await supabaseAdmin
+          .from('users')
+          .select('name, email')
+          .eq('id', task.assigned_to_id)
+          .single();
+
+        const { data: project } = await supabaseAdmin
+          .from('projects')
+          .select('title')
+          .eq('id', task.project_id)
+          .single();
+
+        if (assignedUser && assignedUser.email && project) {
+          // Créer un token de confirmation
+          const confirmationToken = await createConfirmationToken({
+            type: 'TASK_ASSIGNMENT',
+            userId: task.assigned_to_id,
+            entityType: 'task',
+            entityId: task.id,
+            metadata: {
+              task_title: task.title,
+              project_name: project.title
+            }
+          });
+
+          // Créer une notification in-app
+          await supabaseAdmin.from('notifications').insert({
+            user_id: task.assigned_to_id,
+            type: 'TASK_ASSIGNED',
+            title: 'Nouvelle tâche assignée',
+            message: `Vous avez été assigné à la tâche: ${ task.title } `,
+            metadata: {
+              task_id: task.id,
+              project_id: task.project_id,
+              priority: task.priority
+            }
+          });
+
+          // Envoyer l'email à l'utilisateur assigné avec token de confirmation
+          const emailHtml = taskAssignedTemplate({
+            userName: assignedUser.name || 'Utilisateur',
+            taskTitle: task.title,
+            taskDescription: task.description,
+            projectName: project.title,
+            dueDate: task.due_date,
+            priority: task.priority,
+            taskId: task.id,
+            confirmationToken: confirmationToken || undefined
+          });
+
+          await sendEmail({
+            to: assignedUser.email,
+            subject: `Nouvelle tâche assignée: ${ task.title } `,
+            html: emailHtml,
+            metadata: { task_id: task.id, action: 'task_assigned' }
+          });
+        }
+      } catch (emailError) {
+        console.error('Error sending email:', emailError);
+        // Ne pas bloquer la création de la tâche si l'email échoue
+      }
+    }
+
+    return corsResponse(task, request, { status: 201 });
+  } catch (error) {
+    console.error('POST /api/tasks error:', error);
+    return corsResponse(
+      { error: 'Erreur serveur' },
+      request,
+      { status: 500 }
+    );
+  }
+}

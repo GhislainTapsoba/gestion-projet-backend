@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth';
+import { verifyAuth } from '@/lib/verifyAuth';
 import { prisma } from '@/lib/prisma';
 import { sendEmail } from '@/lib/emailService';
 import { emailTemplates } from '@/lib/emailTemplates';
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string; stageId: string } }
+  { params }: { params: Promise<{ id: string; stageId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
+    const { id, stageId } = await params;
+    const user = await verifyAuth(request);
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -19,14 +19,14 @@ export async function PUT(
 
     // Fetch the original stage to compare its status
     const originalStage = await prisma.stage.findUnique({
-      where: { id: parseInt(params.stageId) },
+      where: { id: parseInt(stageId) },
       include: {
         project: true, // Include project to get project details for the email
       },
     });
 
     const updatedStage = await prisma.stage.update({
-      where: { id: parseInt(params.stageId) },
+      where: { id: parseInt(stageId) },
       data: {
         name,
         order,
@@ -82,16 +82,17 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string; stageId: string } }
+  { params }: { params: Promise<{ id: string; stageId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
+    const { id, stageId } = await params;
+    const user = await verifyAuth(request);
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     await prisma.stage.delete({
-      where: { id: parseInt(params.stageId) }
+      where: { id: parseInt(stageId) }
     });
 
     return NextResponse.json({ message: 'Stage deleted successfully' });

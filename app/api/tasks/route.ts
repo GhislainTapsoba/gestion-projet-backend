@@ -1,65 +1,268 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
+import { NextRequest } from 'next/server';
+import { verifyAuth } from '@/lib/verifyAuth';
+import { supabaseAdmin } from '@/lib/supabase';
+import { handleCorsOptions, corsResponse } from '@/lib/cors';
 import { sendEmail } from '@/lib/emailService';
-import { emailTemplates } from '@/lib/emailTemplates';
+import { taskAssignedTemplate } from '@/lib/emailTemplates';
+import { createConfirmationToken } from '@/lib/emailConfirmation';
+import { mapDbRoleToUserRole, requirePermission, canManageProject } from '@/lib/permissions';
+import { sendActionNotification } from '@/lib/notificationService';
 
-export async function POST(request: NextRequest) {
+// Gérer les requêtes OPTIONS (preflight CORS)
+export async function OPTIONS(request: NextRequest) {
+  return handleCorsOptions(request);
+}
+
+// GET /api/tasks - Récupérer toutes les tâches (filtrées par assignation)
+export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const user = await verifyAuth(request);
+    if (!user) {
+      return corsResponse({ error: 'Unauthorized' }, request, { status: 401 });
     }
 
-    const { title, description, dueDate, priority, status, assignedToId, projectId, stageId } = await request.json();
+    const userRole = mapDbRoleToUserRole(user.role);
+    const perm = requirePermission(userRole, 'tasks', 'read');
+    if (!perm.allowed) {
+      return corsResponse({ error: perm.error }, request, { status: 403 });
+    }
 
-    const newTask = await prisma.task.create({
-      data: {
-        title,
-        description,
-        dueDate: dueDate ? new Date(dueDate) : null,
-        priority,
-        status,
-        assignedTo: assignedToId ? { connect: { id: parseInt(assignedToId) } } : undefined,
-        project: { connect: { id: parseInt(projectId) } },
-        stage: stageId ? { connect: { id: parseInt(stageId) } } : undefined,
+    const { searchParams } = new URL(request.url);
+    const status = searchParams.get('status');
+    const project_id = searchParams.get('project_id');
+
+    // Si ADMIN, retourner toutes les tâches
+    if (userRole === 'admin') {
+      let query = supabaseAdmin.from('tasks').select('*');
+
+      if (status) {
+        query = query.eq('status', status);
+      }
+
+      if (project_id) {
+        query = query.eq('project_id', project_id);
+      }
+
+      const { data, error } = await query.order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Supabase error:', error);
+        return corsResponse(
+          { error: 'Erreur lors de la récupération des tâches' },
+          request,
+          { status: 500 }
+        );
+      }
+
+      return corsResponse(data || [], request);
+    }
+
+    // Pour les autres rôles, récupérer d'abord les projets accessibles
+    const { data: projectMembers, error: membersError } = await supabaseAdmin
+      .from('project_members')
+      .select('project_id')
+      .eq('user_id', user.id);
+
+    if (membersError) throw membersError;
+
+    const memberProjectIds = projectMembers?.map(pm => pm.project_id) || [];
+
+    // Récupérer les projets où l'utilisateur est créateur ou manager
+    const { data: accessibleProjects, error: projectsError } = await supabaseAdmin
+      .from('projects')
+      .select('id')
+      .or(`created_by_id.eq.${user.id},manager_id.eq.${user.id}${memberProjectIds.length > 0 ? `,id.in.(${memberProjectIds.join(',')})` : ''}`);
+
+    if (projectsError) throw projectsError;
+
+    const accessibleProjectIds = accessibleProjects?.map(p => p.id) || [];
+
+    // Récupérer les tâches assignées à l'utilisateur OU dans un projet accessible
+    let query = supabaseAdmin.from('tasks').select('*');
+
+    if (accessibleProjectIds.length > 0) {
+      query = query.or(`assigned_to_id.eq.${user.id},project_id.in.(${accessibleProjectIds.join(',')})`);
+    } else {
+      query = query.eq('assigned_to_id', user.id);
+    }
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    if (project_id) {
+      query = query.eq('project_id', project_id);
+    }
+
+    const { data, error } = await query.order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Supabase error:', error);
+      return corsResponse(
+        { error: 'Erreur lors de la récupération des tâches' },
+        request,
+        { status: 500 }
+      );
+    }
+
+    return corsResponse(data || [], request);
+  } catch (error) {
+    console.error('GET /api/tasks error:', error);
+    return corsResponse(
+      { error: 'Erreur serveur' },
+      request,
+      { status: 500 }
+    );
+  }
+}
+
+// POST /api/tasks - Créer une nouvelle tâche
+export async function POST(request: NextRequest) {
+  try {
+    const user = await verifyAuth(request);
+    if (!user) {
+      return corsResponse({ error: 'Unauthorized' }, request, { status: 401 });
+    }
+
+    const userRole = mapDbRoleToUserRole(user.role);
+    const userId = user.id;
+
+    const perm = requirePermission(userRole, 'tasks', 'create');
+    if (!perm.allowed) {
+      return corsResponse({ error: perm.error }, request, { status: 403 });
+    }
+
+    const body = await request.json();
+
+    // Validation
+    if (!body.title || !body.project_id) {
+      return corsResponse(
+        { error: 'Le titre et le project_id sont requis' },
+        request,
+        { status: 400 }
+      );
+    }
+
+    // Vérifier que l'utilisateur peut gérer le projet (manager/admin)
+    const { data: project } = await supabaseAdmin
+      .from('projects')
+      .select('id, manager_id')
+      .eq('id', body.project_id)
+      .single();
+
+    if (!project) {
+      return corsResponse(
+        { error: 'Projet introuvable' },
+        request,
+        { status: 404 }
+      );
+    }
+
+    if (!canManageProject(userRole, userId, project.manager_id)) {
+      return corsResponse(
+        { error: 'Vous ne pouvez créer des tâches que sur vos projets' },
+        request,
+        { status: 403 }
+      );
+    }
+
+    // Créer la tâche
+    const { data: task, error } = await supabaseAdmin
+      .from('tasks')
+      .insert({
+        title: body.title,
+        description: body.description || null,
+        status: body.status || 'TODO',
+        priority: body.priority || 'MEDIUM',
+        due_date: body.due_date || null,
+        assigned_to_id: body.assigned_to_id || null,
+        project_id: body.project_id,
+        stage_id: body.stage_id || null,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Supabase error:', error);
+      return corsResponse(
+        { error: 'Erreur lors de la création de la tâche' },
+        request,
+        { status: 500 }
+      );
+    }
+
+    // Récupérer les informations complètes pour les notifications
+    const { data: projectDetails } = await supabaseAdmin
+      .from('projects')
+      .select('name, title')
+      .eq('id', task.project_id)
+      .single();
+
+    const { data: assignedUser } = task.assigned_to_id
+      ? await supabaseAdmin
+          .from('users')
+          .select('id, name, email, role')
+          .eq('id', task.assigned_to_id)
+          .single()
+      : { data: null };
+
+    // Créer un token de confirmation si la tâche est assignée
+    let confirmationToken: string | null = null;
+    if (task.assigned_to_id) {
+      confirmationToken = await createConfirmationToken({
+        type: 'TASK_ASSIGNMENT',
+        userId: task.assigned_to_id,
+        entityType: 'task',
+        entityId: task.id,
+        metadata: {
+          task_title: task.title,
+          project_name: projectDetails?.title || projectDetails?.name || 'Projet'
+        }
+      });
+
+      // Créer une notification in-app
+      await supabaseAdmin.from('notifications').insert({
+        user_id: task.assigned_to_id,
+        type: 'TASK_ASSIGNED',
+        title: 'Nouvelle tâche assignée',
+        message: `Vous avez été assigné à la tâche: ${task.title}`,
+        metadata: {
+          task_id: task.id,
+          project_id: task.project_id,
+          priority: task.priority
+        }
+      });
+    }
+
+    // Envoyer les notifications par email selon les règles métier
+    await sendActionNotification({
+      actionType: task.assigned_to_id ? 'TASK_ASSIGNED' : 'TASK_CREATED',
+      performedBy: {
+        id: user.id,
+        name: user.name || 'Utilisateur',
+        email: user.email,
+        role: user.role as 'ADMIN' | 'PROJECT_MANAGER' | 'EMPLOYEE'
       },
-      include: {
-        assignedTo: {
-          select: { id: true, name: true, email: true }
-        },
-        project: {
-          select: { id: true, title: true }
-        },
+      entity: {
+        type: 'task',
+        id: task.id,
+        data: task
+      },
+      affectedUsers: assignedUser ? [assignedUser] : [],
+      projectId: task.project_id,
+      metadata: {
+        projectName: projectDetails?.title || projectDetails?.name || 'Projet',
+        assigneeName: assignedUser?.name || 'Utilisateur',
+        confirmationToken
       }
     });
 
-    if (newTask.assignedTo) {
-      const { subject, html } = emailTemplates.taskAssigned(
-        newTask,
-        newTask.project,
-        newTask.assignedTo
-      );
-      await sendEmail(newTask.assignedTo.email, subject, html);
-
-      // Send to Project Manager and General Manager
-      const projectManagerEmail = process.env.PROJECT_MANAGER_EMAIL;
-      const generalManagerEmail = process.env.GENERAL_MANAGER_EMAIL;
-
-      if (projectManagerEmail) {
-        await sendEmail(projectManagerEmail, subject, html);
-      }
-      if (generalManagerEmail) {
-        await sendEmail(generalManagerEmail, subject, html);
-      }
-    }
-
-    return NextResponse.json(newTask, { status: 201 });
+    return corsResponse(task, request, { status: 201 });
   } catch (error) {
-    console.error('Create task error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
+    console.error('POST /api/tasks error:', error);
+    return corsResponse(
+      { error: 'Erreur serveur' },
+      request,
       { status: 500 }
     );
   }

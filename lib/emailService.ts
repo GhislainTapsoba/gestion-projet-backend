@@ -1,25 +1,145 @@
 import nodemailer from 'nodemailer';
+import { supabaseAdmin } from './supabase';
 
+// Configuration du transporteur email
 const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_SERVER_HOST,
-  port: parseInt(process.env.EMAIL_SERVER_PORT || '587', 10),
-  secure: process.env.EMAIL_SERVER_PORT === '465', // Use `true` for port 465, `false` for other ports
+  host: process.env.EMAIL_SERVER_HOST || 'smtp.gmail.com',
+  port: parseInt(process.env.EMAIL_SERVER_PORT || '587'),
+  secure: false, // true for 465, false for other ports
   auth: {
     user: process.env.EMAIL_SERVER_USER,
     pass: process.env.EMAIL_SERVER_PASSWORD,
   },
 });
 
-export async function sendEmail(to: string, subject: string, html: string) {
+export interface EmailOptions {
+  to: string;
+  subject: string;
+  html: string;
+  userId?: number;
+  metadata?: any;
+}
+
+export async function sendEmail(options: EmailOptions): Promise<boolean> {
   try {
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
-      to,
-      subject,
-      html,
+    // Créer un log avant l'envoi
+    const { data: emailLog } = await supabaseAdmin
+      .from('email_logs')
+      .insert({
+        recipient_id: options.userId || null,
+        recipient: options.to,
+        subject: options.subject,
+        body: options.html,
+        status: 'PENDING',
+        metadata: options.metadata
+      })
+      .select()
+      .single();
+
+    // Envoyer l'email
+    const info = await transporter.sendMail({
+      from: process.env.EMAIL_FROM || 'noreply@yourapp.com',
+      to: options.to,
+      subject: options.subject,
+      html: options.html,
     });
-    console.log(`Email sent to ${to} with subject: ${subject}`);
+
+    // Mettre à jour le statut du log
+    if (emailLog) {
+      await supabaseAdmin
+        .from('email_logs')
+        .update({
+          status: 'SENT',
+          sent_at: new Date().toISOString()
+        })
+        .eq('id', emailLog.id);
+    }
+
+    console.log('Email sent:', info.messageId);
+    return true;
   } catch (error) {
-    console.error(`Error sending email to ${to}:`, error);
+    console.error('Error sending email:', error);
+
+    // Mettre à jour le log avec l'erreur
+    if (options.metadata?.log_id) {
+      await supabaseAdmin
+        .from('email_logs')
+        .update({
+          status: 'FAILED',
+          error_message: error instanceof Error ? error.message : 'Unknown error'
+        })
+        .eq('id', options.metadata.log_id);
+    }
+
+    return false;
+  }
+}
+
+// Envoyer un email aux responsables (Chef de projet + Responsable général)
+export async function sendEmailToResponsibles(
+  projectId: number,
+  subject: string,
+  html: string,
+  metadata?: any
+): Promise<void> {
+  try {
+    // Récupérer le chef de projet
+    const { data: project } = await supabaseAdmin
+      .from('projects')
+      .select(`
+        *,
+        created_by:users!projects_created_by_id_fkey(id, email, name, role)
+      `)
+      .eq('id', projectId)
+      .single();
+
+    if (!project) {
+      console.error('Project not found');
+      return;
+    }
+
+    // Récupérer le responsable général (Admin)
+    const { data: admins } = await supabaseAdmin
+      .from('users')
+      .select('*')
+      .eq('role', 'ADMIN')
+      .limit(1);
+
+    const recipients: Array<{ id: number; email: string; name: string }> = [];
+
+    // Ajouter le créateur du projet (souvent le chef de projet)
+    if (project.created_by && project.created_by.email) {
+      recipients.push({
+        id: project.created_by.id,
+        email: project.created_by.email,
+        name: project.created_by.name || 'Chef de projet'
+      });
+    }
+
+    // Ajouter le responsable général
+    if (admins && admins.length > 0) {
+      const admin = admins[0];
+      // Éviter les doublons
+      if (!recipients.find(r => r.email === admin.email)) {
+        recipients.push({
+          id: admin.id,
+          email: admin.email,
+          name: admin.name || 'Responsable général'
+        });
+      }
+    }
+
+    // Envoyer l'email à tous les destinataires
+    for (const recipient of recipients) {
+      await sendEmail({
+        to: recipient.email,
+        subject,
+        html,
+        userId: recipient.id,
+        metadata: { ...metadata, project_id: projectId }
+      });
+    }
+  } catch (error) {
+    console.error('Error sending emails to responsibles:', error);
   }
 }
