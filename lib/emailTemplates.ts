@@ -136,14 +136,23 @@ export function taskAssignedTemplate(data: {
 
     ${data.confirmationToken ? `
       <div class="info-box" style="background: #d1ecf1; border-left-color: #0c5460;">
-        <p><strong>📧 Action requise:</strong> Répondez à cet email ou cliquez sur le bouton ci-dessous pour confirmer la réception et démarrer la tâche.</p>
+        <p><strong>📧 Action requise:</strong> Veuillez confirmer la réception et démarrer la tâche, ou refuser si vous ne pouvez pas la réaliser.</p>
       </div>
 
-      <p style="text-align: center;">
-        <a href="${FRONTEND_URL}/api/confirm-email?token=${data.confirmationToken}" class="button" style="background: #28a745;">
-          ✓ Confirmer et démarrer la tâche
-        </a>
-      </p>
+      <table style="width: 100%; margin: 20px 0;">
+        <tr>
+          <td style="padding: 5px; text-align: center;">
+            <a href="${FRONTEND_URL}/api/confirm-email?token=${data.confirmationToken}" class="button" style="background: #28a745; display: inline-block; padding: 12px 30px; color: #ffffff !important; text-decoration: none; border-radius: 5px; font-weight: bold;">
+              ✓ Confirmer et démarrer
+            </a>
+          </td>
+          <td style="padding: 5px; text-align: center;">
+            <a href="${createRedirectUrl(`/reject-task?taskId=${data.taskId}`)}" class="button" style="background: #dc3545; display: inline-block; padding: 12px 30px; color: #ffffff !important; text-decoration: none; border-radius: 5px; font-weight: bold;">
+              ✕ Refuser la tâche
+            </a>
+          </td>
+        </tr>
+      </table>
 
       <p style="text-align: center; margin-top: 10px;">
         <a href="${createRedirectUrl(`/dashboard/tasks/${data.taskId}`)}" style="color: #667eea; text-decoration: none;">
@@ -534,6 +543,45 @@ export function allStagesCompletedTemplate(data: {
       <p style="text-align: center; margin: 0;">
         <strong>🎊 Félicitations à toute l'équipe pour ce projet réussi!</strong>
       </p>
+    </div>
+  `;
+
+  return baseTemplate(content);
+}
+
+// Template: Tâche refusée par l'employé
+export function taskRejectedByEmployeeTemplate(data: {
+  employeeName: string;
+  taskTitle: string;
+  projectName: string;
+  taskId: string;
+  rejectionReason: string;
+  managerName: string;
+}): string {
+  const content = `
+    <h2 style="color: #dc3545;">❌ Tâche refusée</h2>
+    <p>Bonjour <strong>${data.managerName}</strong>,</p>
+    <p>L'employé <strong>${data.employeeName}</strong> a refusé la tâche "<strong>${data.taskTitle}</strong>" dans le projet <strong>${data.projectName}</strong>.</p>
+
+    <div class="task-details" style="background: #f8d7da; border-left: 4px solid #dc3545;">
+      <h3 style="margin-top: 0; color: #721c24;">${data.taskTitle}</h3>
+      <p><strong>Employé:</strong> ${data.employeeName}</p>
+      <p><strong>Statut:</strong> <span style="color: #dc3545; font-weight: bold;">REFUSÉE</span></p>
+      <p><strong>Raison du refus:</strong><br/><em>${data.rejectionReason}</em></p>
+    </div>
+
+    <div class="info-box" style="background: #fff3cd; border-left-color: #856404;">
+      <p><strong>⚠️ Action requise:</strong> Veuillez prendre contact avec l'employé pour comprendre les raisons du refus et réassigner la tâche si nécessaire.</p>
+    </div>
+
+    <p style="text-align: center;">
+      <a href="${createRedirectUrl(`/dashboard/tasks/${data.taskId}`)}" class="button" style="background: #dc3545;">
+        Consulter la tâche
+      </a>
+    </p>
+
+    <div class="info-box">
+      <p><strong>💡 Note:</strong> Le statut de la tâche n'a pas été modifié. Vous pouvez la réassigner à un autre employé ou la modifier selon les besoins.</p>
     </div>
   `;
 
