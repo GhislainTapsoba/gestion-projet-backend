@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS stages (
   duration INTEGER,
   status VARCHAR(50) DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'BLOCKED')),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_by_id UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   assigned_to_id UUID REFERENCES users(id) ON DELETE SET NULL,
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   stage_id UUID REFERENCES stages(id) ON DELETE SET NULL,
+  created_by_id UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

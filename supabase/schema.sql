@@ -69,6 +69,7 @@ CREATE TABLE tasks (
   assigned_to_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
   project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   stage_id BIGINT REFERENCES stages(id) ON DELETE SET NULL,
+  created_by_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

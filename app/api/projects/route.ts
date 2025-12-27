@@ -31,7 +31,10 @@ export async function GET(request: NextRequest) {
 
     // Si ADMIN, retourner tous les projets
     if (userRole === 'admin') {
-      let query = supabaseAdmin.from('projects').select('*');
+      let query = supabaseAdmin.from('projects').select(`
+        *,
+        manager:users!manager_id(name)
+      `);
 
       if (status) {
         query = query.eq('status', status);
@@ -41,7 +44,17 @@ export async function GET(request: NextRequest) {
 
       if (error) throw error;
 
-      return corsResponse(data || [], request);
+      // Transform data to use manager_name instead of manager_id
+      const transformedData = data?.map(project => ({
+        ...project,
+        manager_name: project.manager?.name || null
+      }));
+      transformedData?.forEach(project => {
+        delete project.manager_id;
+        delete project.manager;
+      });
+
+      return corsResponse(transformedData || [], request);
     }
 
     // Pour les autres rôles, filtrer par assignation
@@ -71,7 +84,10 @@ export async function GET(request: NextRequest) {
     // Récupérer les projets où l'utilisateur est créateur, manager, membre OU a des tâches assignées
     let query = supabaseAdmin
       .from('projects')
-      .select('*')
+      .select(`
+        *,
+        manager:users!manager_id(name)
+      `)
       .or(`created_by_id.eq.${user.id},manager_id.eq.${user.id}${allAccessibleProjectIds.length > 0 ? `,id.in.(${allAccessibleProjectIds.join(',')})` : ''}`);
 
     if (status) {
@@ -82,7 +98,17 @@ export async function GET(request: NextRequest) {
 
     if (error) throw error;
 
-    return corsResponse(data || [], request);
+    // Transform data to use manager_name instead of manager_id
+    const transformedData = data?.map(project => ({
+      ...project,
+      manager_name: project.manager?.name || null
+    }));
+    transformedData?.forEach(project => {
+      delete project.manager_id;
+      delete project.manager;
+    });
+
+    return corsResponse(transformedData || [], request);
   } catch (error) {
     console.error('Get projects error:', error);
     return corsResponse(
@@ -121,7 +147,10 @@ export async function POST(request: NextRequest) {
         created_by_id: body.created_by_id || user.id || null,
         manager_id: body.manager_id || null,
       })
-      .select()
+      .select(`
+        *,
+        manager:users!manager_id(name)
+      `)
       .single();
 
     if (error) throw error;
@@ -155,7 +184,15 @@ export async function POST(request: NextRequest) {
       metadata: {}
     });
 
-    return corsResponse(data, request, { status: 201 });
+    // Transform data to use manager_name instead of manager_id
+    const transformedData = {
+      ...data,
+      manager_name: data.manager?.name || null
+    };
+    delete transformedData.manager_id;
+    delete transformedData.manager;
+
+    return corsResponse(transformedData, request, { status: 201 });
   } catch (error) {
     console.error('Create project error:', error);
     return corsResponse(

@@ -38,7 +38,15 @@ export async function GET(
       );
     }
 
-    return corsResponse(data, request);
+    // Transform data to use names instead of IDs
+    const transformedData = {
+      ...data,
+      uploaded_by_name: data.uploaded_by_user?.name || null
+    };
+    delete transformedData.uploaded_by;
+    delete transformedData.uploaded_by_user;
+
+    return corsResponse(transformedData, request);
   } catch (error) {
     console.error('GET /api/documents/[id] error:', error);
     return corsResponse(

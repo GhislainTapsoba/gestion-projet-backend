@@ -31,7 +31,10 @@ export async function GET(
 
     const { data, error } = await supabaseAdmin
       .from('projects')
-      .select('*')
+      .select(`
+        *,
+        manager:users!manager_id(name)
+      `)
       .eq('id', id)
       .single();
 
@@ -76,7 +79,15 @@ export async function GET(
       }
     }
 
-    return corsResponse(data, request);
+    // Transform data to use manager_name instead of manager_id
+    const transformedData = {
+      ...data,
+      manager_name: data.manager?.name || null
+    };
+    delete transformedData.manager_id;
+    delete transformedData.manager;
+
+    return corsResponse(transformedData, request);
   } catch (error) {
     console.error('Get project error:', error);
     return corsResponse(
@@ -141,7 +152,10 @@ export async function PATCH(
       .from('projects')
       .update(updateData)
       .eq('id', id)
-      .select()
+      .select(`
+        *,
+        manager:users!manager_id(name)
+      `)
       .single();
 
     if (error) {
@@ -151,11 +165,19 @@ export async function PATCH(
       throw error;
     }
 
+    // Transform data to use manager_name instead of manager_id
+    const transformedData = {
+      ...data,
+      manager_name: data.manager?.name || null
+    };
+    delete transformedData.manager_id;
+    delete transformedData.manager;
+
     // Note: Les notifications pour les modifications de projet sont désactivées pour l'instant
     // car il n'y a pas de template email dédié. Les modifications importantes (statut, etc.)
     // sont déjà notifiées via les tâches et étapes associées.
 
-    return corsResponse(data, request);
+    return corsResponse(transformedData, request);
   } catch (error) {
     console.error('Update project error:', error);
     return corsResponse(

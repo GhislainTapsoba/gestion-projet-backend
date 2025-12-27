@@ -33,7 +33,11 @@ export async function GET(request: NextRequest) {
 
     // Si ADMIN, retourner toutes les tâches
     if (userRole === 'admin') {
-      let query = supabaseAdmin.from('tasks').select('*');
+      let query = supabaseAdmin.from('tasks').select(`
+        *,
+        assigned_to:users!assigned_to_id(name),
+        created_by:users!created_by_id(name)
+      `);
 
       if (status) {
         query = query.eq('status', status);
@@ -54,7 +58,20 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      return corsResponse(data || [], request);
+      // Transform data to use names instead of IDs
+      const transformedData = data?.map(task => ({
+        ...task,
+        assigned_to_name: task.assigned_to?.name || null,
+        created_by_name: task.created_by?.name || null
+      }));
+      transformedData?.forEach(task => {
+        delete task.assigned_to_id;
+        delete task.created_by_id;
+        delete task.assigned_to;
+        delete task.created_by;
+      });
+
+      return corsResponse(transformedData || [], request);
     }
 
     // Pour les autres rôles, récupérer d'abord les projets accessibles
@@ -78,7 +95,11 @@ export async function GET(request: NextRequest) {
     const accessibleProjectIds = accessibleProjects?.map(p => p.id) || [];
 
     // Récupérer les tâches assignées à l'utilisateur OU dans un projet accessible
-    let query = supabaseAdmin.from('tasks').select('*');
+    let query = supabaseAdmin.from('tasks').select(`
+      *,
+      assigned_to:users!assigned_to_id(name),
+      created_by:users!created_by_id(name)
+    `);
 
     if (accessibleProjectIds.length > 0) {
       query = query.or(`assigned_to_id.eq.${user.id},project_id.in.(${accessibleProjectIds.join(',')})`);
@@ -105,7 +126,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return corsResponse(data || [], request);
+    // Transform data to use names instead of IDs
+    const transformedData = data?.map(task => ({
+      ...task,
+      assigned_to_name: task.assigned_to?.name || null,
+      created_by_name: task.created_by?.name || null
+    }));
+    transformedData?.forEach(task => {
+      delete task.assigned_to_id;
+      delete task.created_by_id;
+      delete task.assigned_to;
+      delete task.created_by;
+    });
+
+    return corsResponse(transformedData || [], request);
   } catch (error) {
     console.error('GET /api/tasks error:', error);
     return corsResponse(
@@ -178,8 +212,13 @@ export async function POST(request: NextRequest) {
         assigned_to_id: body.assigned_to_id || null,
         project_id: body.project_id,
         stage_id: body.stage_id || null,
+        created_by_id: userId,
       })
-      .select()
+      .select(`
+        *,
+        assigned_to:users!assigned_to_id(name),
+        created_by:users!created_by_id(name)
+      `)
       .single();
 
     if (error) {
@@ -257,7 +296,18 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    return corsResponse(task, request, { status: 201 });
+    // Transform task data to use names instead of IDs
+    const transformedTask = {
+      ...task,
+      assigned_to_name: task.assigned_to?.name || null,
+      created_by_name: task.created_by?.name || null
+    };
+    delete transformedTask.assigned_to_id;
+    delete transformedTask.created_by_id;
+    delete transformedTask.assigned_to;
+    delete transformedTask.created_by;
+
+    return corsResponse(transformedTask, request, { status: 201 });
   } catch (error) {
     console.error('POST /api/tasks error:', error);
     return corsResponse(

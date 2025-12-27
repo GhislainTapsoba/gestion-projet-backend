@@ -32,7 +32,10 @@ export async function GET(
 
     const { data, error } = await supabaseAdmin
       .from('stages')
-      .select('*')
+      .select(`
+        *,
+        created_by:users!created_by_id(name)
+      `)
       .eq('id', id)
       .single();
 
@@ -75,7 +78,15 @@ export async function GET(
       }
     }
 
-    return corsResponse(data, request);
+    // Transform data to use names instead of IDs
+    const transformedData = {
+      ...data,
+      created_by_name: data.created_by?.name || null
+    };
+    delete transformedData.created_by_id;
+    delete transformedData.created_by;
+
+    return corsResponse(transformedData, request);
   } catch (error) {
     console.error('GET /api/stages/[id] error:', error);
     return corsResponse(
@@ -171,7 +182,10 @@ export async function PATCH(
       .from('stages')
       .update(updateData)
       .eq('id', id)
-      .select()
+      .select(`
+        *,
+        created_by:users!created_by_id(name)
+      `)
       .single();
 
     if (error) {
@@ -267,7 +281,15 @@ export async function PATCH(
       }
     }
 
-    return corsResponse(data, request);
+    // Transform data to use names instead of IDs
+    const transformedData = {
+      ...data,
+      created_by_name: data.created_by?.name || null
+    };
+    delete transformedData.created_by_id;
+    delete transformedData.created_by;
+
+    return corsResponse(transformedData, request);
   } catch (error) {
     console.error('PATCH /api/stages/[id] error:', error);
     return corsResponse(

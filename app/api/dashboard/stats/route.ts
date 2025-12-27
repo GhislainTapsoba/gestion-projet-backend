@@ -24,18 +24,52 @@ export async function GET(request: NextRequest) {
     ]);
 
     // Récupérer les projets récents
-    const { data: recentProjects } = await supabaseAdmin
+    const { data: recentProjectsData } = await supabaseAdmin
       .from('projects')
-      .select('*')
+      .select(`
+        *,
+        manager:users!manager_id(name),
+        created_by:users!created_by_id(name)
+      `)
       .order('created_at', { ascending: false })
       .limit(5);
 
+    // Transform recent projects
+    const recentProjects = recentProjectsData?.map(project => ({
+      ...project,
+      manager_name: project.manager?.name || null,
+      created_by_name: project.created_by?.name || null
+    }));
+    recentProjects?.forEach(project => {
+      delete project.manager_id;
+      delete project.created_by_id;
+      delete project.manager;
+      delete project.created_by;
+    });
+
     // Récupérer les tâches récentes
-    const { data: recentTasks } = await supabaseAdmin
+    const { data: recentTasksData } = await supabaseAdmin
       .from('tasks')
-      .select('*')
+      .select(`
+        *,
+        assigned_to:users!assigned_to_id(name),
+        created_by:users!created_by_id(name)
+      `)
       .order('created_at', { ascending: false })
       .limit(5);
+
+    // Transform recent tasks
+    const recentTasks = recentTasksData?.map(task => ({
+      ...task,
+      assigned_to_name: task.assigned_to?.name || null,
+      created_by_name: task.created_by?.name || null
+    }));
+    recentTasks?.forEach(task => {
+      delete task.assigned_to_id;
+      delete task.created_by_id;
+      delete task.assigned_to;
+      delete task.created_by;
+    });
 
     // Récupérer les tâches par statut
     const { data: tasksByStatus } = await supabaseAdmin

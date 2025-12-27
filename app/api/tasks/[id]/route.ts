@@ -39,7 +39,11 @@ export async function GET(
 
     const { data, error } = await supabaseAdmin
       .from('tasks')
-      .select('*')
+      .select(`
+        *,
+        assigned_to:users!assigned_to_id(name),
+        created_by:users!created_by_id(name)
+      `)
       .eq('id', id)
       .single();
 
@@ -91,7 +95,18 @@ export async function GET(
       }
     }
 
-    return corsResponse(data, request);
+    // Transform data to use names instead of IDs
+    const transformedData = {
+      ...data,
+      assigned_to_name: data.assigned_to?.name || null,
+      created_by_name: data.created_by?.name || null
+    };
+    delete transformedData.assigned_to_id;
+    delete transformedData.created_by_id;
+    delete transformedData.assigned_to;
+    delete transformedData.created_by;
+
+    return corsResponse(transformedData, request);
   } catch (error) {
     console.error('GET /api/tasks/[id] error:', error);
     return corsResponse(
@@ -184,7 +199,11 @@ export async function PATCH(
       .from('tasks')
       .update(updateData)
       .eq('id', taskId)
-      .select()
+      .select(`
+        *,
+        assigned_to:users!assigned_to_id(name),
+        created_by:users!created_by_id(name)
+      `)
       .single();
 
     if (error) {
@@ -345,7 +364,18 @@ export async function PATCH(
       });
     }
 
-    return corsResponse(task, request);
+    // Transform task data to use names instead of IDs
+    const transformedTask = {
+      ...task,
+      assigned_to_name: task.assigned_to?.name || null,
+      created_by_name: task.created_by?.name || null
+    };
+    delete transformedTask.assigned_to_id;
+    delete transformedTask.created_by_id;
+    delete transformedTask.assigned_to;
+    delete transformedTask.created_by;
+
+    return corsResponse(transformedTask, request);
   } catch (error) {
     console.error('PATCH /api/tasks/[id] error:', error);
     return corsResponse(

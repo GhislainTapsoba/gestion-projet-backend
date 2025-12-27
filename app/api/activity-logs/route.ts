@@ -61,7 +61,17 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return corsResponse(data || [], request);
+    // Transform data to use names instead of IDs
+    const transformedData = data?.map(log => ({
+      ...log,
+      user_name: log.user?.name || null
+    }));
+    transformedData?.forEach(log => {
+      delete log.user_id;
+      delete log.user;
+    });
+
+    return corsResponse(transformedData || [], request);
   } catch (error) {
     console.error('GET /api/activity-logs error:', error);
     return corsResponse(

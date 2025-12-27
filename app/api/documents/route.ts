@@ -43,7 +43,17 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return corsResponse(data || [], request);
+    // Transform data to use names instead of IDs
+    const transformedData = data?.map(doc => ({
+      ...doc,
+      uploaded_by_name: doc.uploaded_by_user?.name || null
+    }));
+    transformedData?.forEach(doc => {
+      delete doc.uploaded_by;
+      delete doc.uploaded_by_user;
+    });
+
+    return corsResponse(transformedData || [], request);
   } catch (error) {
     console.error('GET /api/documents error:', error);
     return corsResponse(

@@ -31,7 +31,10 @@ export async function GET(request: NextRequest) {
     if (userRole === 'admin') {
       let query = supabaseAdmin
         .from('stages')
-        .select('*')
+        .select(`
+          *,
+          created_by:users!created_by_id(name)
+        `)
         .order('order', { ascending: true });
 
       if (projectId) {
@@ -49,7 +52,17 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      return corsResponse(data, request);
+      // Transform data to use names instead of IDs
+      const transformedData = data?.map(stage => ({
+        ...stage,
+        created_by_name: stage.created_by?.name || null
+      }));
+      transformedData?.forEach(stage => {
+        delete stage.created_by_id;
+        delete stage.created_by;
+      });
+
+      return corsResponse(transformedData, request);
     }
 
     // Pour les autres rôles, filtrer par accès au projet
@@ -93,7 +106,10 @@ export async function GET(request: NextRequest) {
     // Récupérer les étapes des projets accessibles
     let query = supabaseAdmin
       .from('stages')
-      .select('*')
+      .select(`
+        *,
+        created_by:users!created_by_id(name)
+      `)
       .in('project_id', accessibleProjectIds)
       .order('order', { ascending: true });
 
@@ -116,7 +132,17 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return corsResponse(data, request);
+    // Transform data to use names instead of IDs
+    const transformedData = data?.map(stage => ({
+      ...stage,
+      created_by_name: stage.created_by?.name || null
+    }));
+    transformedData?.forEach(stage => {
+      delete stage.created_by_id;
+      delete stage.created_by;
+    });
+
+    return corsResponse(transformedData, request);
   } catch (error) {
     console.error('GET /api/stages error:', error);
     return corsResponse(
@@ -186,9 +212,13 @@ export async function POST(request: NextRequest) {
         order: order || 0,
         duration,
         project_id,
-        status: 'PENDING'
+        status: 'PENDING',
+        created_by_id: userId
       })
-      .select()
+      .select(`
+        *,
+        created_by:users!created_by_id(name)
+      `)
       .single();
 
     if (error) {
@@ -209,7 +239,15 @@ export async function POST(request: NextRequest) {
       details: `Created stage: ${name}`
     });
 
-    return corsResponse(data, request, { status: 201 });
+    // Transform data to use names instead of IDs
+    const transformedData = {
+      ...data,
+      created_by_name: data.created_by?.name || null
+    };
+    delete transformedData.created_by_id;
+    delete transformedData.created_by;
+
+    return corsResponse(transformedData, request, { status: 201 });
   } catch (error) {
     console.error('POST /api/stages error:', error);
     return corsResponse(
