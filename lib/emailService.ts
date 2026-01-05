@@ -1,16 +1,9 @@
-import nodemailer from 'nodemailer';
 import { supabaseAdmin } from './supabase';
 
-// Configuration du transporteur email
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_SERVER_HOST || 'smtp.gmail.com',
-  port: parseInt(process.env.EMAIL_SERVER_PORT || '587'),
-  secure: false, // true for 465, false for other ports
-  auth: {
-    user: process.env.EMAIL_SERVER_USER,
-    pass: process.env.EMAIL_SERVER_PASSWORD,
-  },
-});
+// Configuration Mailjet
+if (!process.env.MAILJET_API_KEY || !process.env.MAILJET_SECRET_KEY) {
+  console.warn('MAILJET credentials not found, emails will not be sent');
+}
 
 export interface EmailOptions {
   to: string;
@@ -22,6 +15,12 @@ export interface EmailOptions {
 
 export async function sendEmail(options: EmailOptions): Promise<boolean> {
   try {
+    // Vérifier si Mailjet est configuré
+    if (!process.env.MAILJET_API_KEY || !process.env.MAILJET_SECRET_KEY) {
+      console.log(`Email disabled - would send to: ${options.to}`);
+      return false;
+    }
+
     // Créer un log avant l'envoi
     const { data: emailLog } = await supabaseAdmin
       .from('email_logs')
@@ -36,13 +35,34 @@ export async function sendEmail(options: EmailOptions): Promise<boolean> {
       .select()
       .single();
 
-    // Envoyer l'email
-    const info = await transporter.sendMail({
-      from: process.env.EMAIL_FROM || 'noreply@yourapp.com',
-      to: options.to,
-      subject: options.subject,
-      html: options.html,
+    // Envoyer l'email avec Mailjet
+    const auth = Buffer.from(`${process.env.MAILJET_API_KEY}:${process.env.MAILJET_SECRET_KEY}`).toString('base64');
+    
+    const response = await fetch('https://api.mailjet.com/v3.1/send', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        Messages: [{
+          From: {
+            Email: process.env.MAIL_FROM_EMAIL || 'no-reply@tdrprojects.com',
+            Name: process.env.MAIL_FROM_NAME || 'TDR Projects'
+          },
+          To: [{
+            Email: options.to
+          }],
+          Subject: options.subject,
+          HTMLPart: options.html
+        }]
+      }),
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Mailjet API error: ${response.status} - ${errorText}`);
+    }
 
     // Mettre à jour le statut du log
     if (emailLog) {
@@ -55,7 +75,7 @@ export async function sendEmail(options: EmailOptions): Promise<boolean> {
         .eq('id', emailLog.id);
     }
 
-    console.log('Email sent:', info.messageId);
+    console.log('Email sent via Mailjet');
     return true;
   } catch (error) {
     console.error('Error sending email:', error);
